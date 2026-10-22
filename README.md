@@ -11,7 +11,7 @@ npm test         # engine, solver, powers, challenge/lesson solvability, server 
 npm run build && npm start   # production: server serves dist/ and /ws on :3000 (also rebuilds api/ws.js)
 ```
 
-Environment: `PORT` (default 3000), `ALLOWED_ORIGINS` (comma-separated WebSocket origins; defaults to same host), `NODE_ENV=production` (enables HSTS, disables localhost origin allowance). Client build: `VITE_WS_URL` (game server address when the site and the server are on different hosts). Vercel function: `REDIS_URL` (or `KV_URL`).
+Environment: `PORT` (default 3000), `ALLOWED_ORIGINS` (comma-separated WebSocket origins; defaults to same host), `NODE_ENV=production` (enables HSTS, disables localhost origin allowance). Client build: `VITE_WS_URL` (game server address when the site and the server are on different hosts). Vercel function: `REDIS_URL` (or `KV_URL`, or any variable holding a `redis://` URL; without one, rooms stay in instance memory).
 
 Deploying to Vercel, including online play (needs a Redis database connected to the project): see [docs/deploy.md](docs/deploy.md).
 
@@ -42,6 +42,7 @@ A seeded spinner deals every living player one power-up on round 1 and every 2 r
 - Missiles blast a round crater (radius 2.5% of the arena width) exactly where they hit a breakable obstacle; the rest of it stays. Later shots fly through the hole. Gray riveted metal can't be broken.
 - Functions undefined at x = 0 are rejected. A shot ends at the first collision, at the arena edge, where the function becomes undefined, or at an asymptote.
 - Firing order is lock-in time (First Strike goes first). Players who don't lock in pass. A player eliminated before their turn loses their shot.
+- Cheat code: type `opensesame` in the function box during a battle, then click the players you want to hit. It types in a function that hits them (checked against the real board), or the shot that blasts open the obstacle in the way. A shot stops at the first player it hits, so one function knocks out one target, or two with Mirror Shot (one on each side). It stays on for the player who typed it.
 - Absolute value can be typed as `|x - 3|` or `abs(x - 3)`. Trig uses radians.
 
 ## Layout

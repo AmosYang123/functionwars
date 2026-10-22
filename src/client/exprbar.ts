@@ -161,6 +161,8 @@ export class ExprBar {
     // Don't shout while someone is mid-word; show the problem once they pause.
     this.setNote('');
     this.opts.onInput(expr, { ok: false, error: c.error });
+    // The handler replaced the text (the cheat code clears itself): nothing to report.
+    if (this.input.value !== expr) return;
     const show = () => {
       this.error = c.error;
       this.note.replaceChildren(icon('alert', 14), c.error);

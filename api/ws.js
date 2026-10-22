@@ -1542,6 +1542,7 @@ var GRACE_MS = 2e4;
 var active = (m) => !m.left;
 var connected = (s) => s.members.filter((m) => m.connected);
 var inGrace = (m) => !m.connected && m.goneAt !== void 0;
+var isMember = (s, id) => s.members.some((m) => m.id === id && active(m));
 function broadcast(s, ctx, msg) {
 	ctx.out.push({
 		to: connected(s).map((m) => m.id),
@@ -1890,6 +1891,7 @@ function serveSockets(server, hub, paths) {
 	}
 }
 // server/lobby.ts
+var MAX_ROOMS = 500;
 var realClock = {
 	now: () => Date.now(),
 	setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -1914,6 +1916,142 @@ function reply(ctx, id, error) {
 		msg: error
 	});
 }
+/** Every room inside this one process: `npm start`, `npm run dev` and tests. */
+var Lobby = class {
+	clock;
+	rooms = /* @__PURE__ */ new Map();
+	/** Player id → room code. */
+	roomOf = /* @__PURE__ */ new Map();
+	/** Player id → its socket. */
+	conns = /* @__PURE__ */ new Map();
+	timers = /* @__PURE__ */ new Map();
+	/** The public room currently filling up, if any. */
+	publicCode = null;
+	constructor(clock = realClock) {
+		this.clock = clock;
+	}
+	handle(conn, msg) {
+		this.conns.set(conn.id, conn);
+		const err = (m) => conn.send({
+			t: "error",
+			msg: m
+		});
+		const code = this.roomOf.get(conn.id);
+		const room = code ? this.rooms.get(code) : void 0;
+		const here = room && isMember(room, conn.id) ? room : void 0;
+		switch (msg.t) {
+			case "create":
+				if (here) return err("Leave your current room first");
+				if (this.rooms.size >= MAX_ROOMS) return err("Server is busy, try again soon");
+				this.open(conn, (c, ctx) => createRoom(c, joiner(conn, msg.name, msg.look), msg.lives, false, ctx));
+				return;
+			case "quick": {
+				if (here) return err("Leave your current room first");
+				const p = this.publicCode ? this.rooms.get(this.publicCode) : void 0;
+				if (p && p.open && this.enter(conn, p.code, msg.name, msg.look, true)) return;
+				if (this.rooms.size >= MAX_ROOMS) return err("Server is busy, try again soon");
+				this.publicCode = this.open(conn, (c, ctx) => createRoom(c, joiner(conn, msg.name, msg.look), 1, true, ctx));
+				return;
+			}
+			case "join":
+				if (here) return err("Leave your current room first");
+				if (!this.rooms.has(msg.code)) return err("No room with that code");
+				this.enter(conn, msg.code, msg.name, msg.look);
+				return;
+			case "start":
+				if (!here) return err("Join a room first");
+				this.run(here.code, (s, ctx) => reply(ctx, conn.id, start(s, conn.id, ctx)));
+				return;
+			case "lock":
+				if (!here) return err("Join a room first");
+				this.run(here.code, (s, ctx) => reply(ctx, conn.id, lock(s, conn.id, msg.expr, msg.facing, {
+					power: msg.power,
+					to: msg.to
+				}, ctx)));
+				return;
+			case "leave":
+				if (here) this.run(here.code, (s, ctx) => remove(s, conn.id, ctx));
+				this.roomOf.delete(conn.id);
+				return;
+			case "resume": {
+				const c = this.roomOf.get(msg.id);
+				let ok = false;
+				if (c) this.run(c, (s, ctx) => {
+					if (resume(s, msg.id, hashKey(msg.key), conn.sid, ctx)) return;
+					ok = true;
+					if (this.conns.get(conn.id) === conn) this.conns.delete(conn.id);
+					conn.id = msg.id;
+					conn.keyHash = hashKey(msg.key);
+					this.conns.set(conn.id, conn);
+				});
+				if (!ok) conn.send({
+					t: "error",
+					msg: "That game is no longer available",
+					code: "resume"
+				});
+				return;
+			}
+		}
+	}
+	disconnect(conn) {
+		if (this.conns.get(conn.id) !== conn) return;
+		this.conns.delete(conn.id);
+		const code = this.roomOf.get(conn.id);
+		if (code) this.run(code, (s, ctx) => drop(s, conn.id, conn.sid, ctx));
+	}
+	open(conn, make) {
+		let code = newCode();
+		while (this.rooms.has(code)) code = newCode();
+		const ctx = {
+			now: this.clock.now(),
+			out: []
+		};
+		const s = make(code, ctx);
+		this.rooms.set(code, s);
+		this.roomOf.set(conn.id, code);
+		this.after(s, ctx);
+		return code;
+	}
+	/** Join a room. `quiet` skips the error message (quick match falls back to a new room). */
+	enter(conn, code, name, look, quiet = false) {
+		let joined = false;
+		this.run(code, (s, ctx) => {
+			const e = addMember(s, joiner(conn, name, look), ctx);
+			joined = !e;
+			if (joined) this.roomOf.set(conn.id, code);
+			else if (!quiet) reply(ctx, conn.id, e);
+		});
+		return joined;
+	}
+	/** Catch up on anything due, apply one change, deliver what it produced, and reschedule. */
+	run(code, fn) {
+		const s = this.rooms.get(code);
+		if (!s) return;
+		const ctx = {
+			now: this.clock.now(),
+			out: []
+		};
+		tick(s, ctx);
+		fn(s, ctx);
+		this.after(s, ctx);
+	}
+	after(s, ctx) {
+		for (const o of ctx.out) for (const id of o.to) this.conns.get(id)?.send(o.msg);
+		const t = this.timers.get(s.code);
+		if (t !== void 0) this.clock.clearTimeout(t);
+		this.timers.delete(s.code);
+		if (isEmpty(s)) {
+			this.rooms.delete(s.code);
+			if (this.publicCode === s.code) this.publicCode = null;
+			return;
+		}
+		const wake = wakeAt(s);
+		if (wake !== null) this.timers.set(s.code, this.clock.setTimeout(() => {
+			this.timers.delete(s.code);
+			this.run(s.code, () => {});
+		}, Math.max(0, wake - ctx.now)));
+	}
+};
 // server/redis-lobby.ts
 var ROOM_TTL_MS = 72e5;
 var LOCK_TTL_MS = 5e3;
@@ -2143,6 +2281,16 @@ var RedisLobby = class {
 };
 // server/redis-store.ts
 var DEL_IF = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+/**
+* The Redis address from the environment. REDIS_URL or KV_URL normally, but the
+* Marketplace lets a project pick a custom prefix (STORAGE_URL, MYDB_REDIS_URL...),
+* so failing those, any variable that holds a redis:// or rediss:// address.
+*/
+function findRedisUrl(env) {
+	const isRedis = (v) => !!v && /^rediss?:\/\//.test(v);
+	for (const k of ["REDIS_URL", "KV_URL"]) if (isRedis(env[k])) return env[k];
+	return Object.keys(env).sort().map((k) => env[k]).find(isRedis);
+}
 /** Store over a Redis URL (Upstash's REDIS_URL from the Vercel Marketplace, or any Redis 6+). */
 function redisStore(url) {
 	const client = createClient({ url });
@@ -2196,15 +2344,20 @@ function redisStore(url) {
 * The online game server as a Vercel Function. Bundled into api/ws.js by
 * `npm run build:api`; vercel.json rewrites /ws here. Each function instance
 * holds some of the sockets, and rooms are shared through Redis.
+*
+* Without Redis, rooms live in this instance's memory. That works while every
+* player of a room lands on the same instance, which is usual with little
+* traffic, but a player routed to another instance can't find the room.
+* ponytail: memory fallback so online play works before Redis is connected; Redis makes it reliable.
 */
-var url = process.env.REDIS_URL ?? process.env.KV_URL;
+var url = findRedisUrl(process.env);
 var server = createServer((_req, res) => {
-	res.writeHead(url ? 200 : 503, {
+	res.writeHead(200, {
 		"Content-Type": "text/plain",
 		"Cache-Control": "no-store"
 	});
-	res.end(url ? "ok" : "Online play needs a Redis database: connect one in Vercel (Storage) so REDIS_URL is set.");
+	res.end(url ? "ok" : "ok (no Redis: rooms are kept in memory)");
 });
-if (url) serveSockets(server, new RedisLobby(redisStore(url)), ["/ws", "/api/ws"]);
-else console.error("REDIS_URL is not set: online play is off");
+if (!url) console.warn("No Redis URL found: keeping rooms in memory");
+serveSockets(server, url ? new RedisLobby(redisStore(url)) : new Lobby(), ["/ws", "/api/ws"]);
 export { server as default };

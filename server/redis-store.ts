@@ -3,6 +3,17 @@ import type { Store } from './redis-lobby.ts';
 
 const DEL_IF = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 
+/**
+ * The Redis address from the environment. REDIS_URL or KV_URL normally, but the
+ * Marketplace lets a project pick a custom prefix (STORAGE_URL, MYDB_REDIS_URL...),
+ * so failing those, any variable that holds a redis:// or rediss:// address.
+ */
+export function findRedisUrl(env: Record<string, string | undefined>): string | undefined {
+  const isRedis = (v: string | undefined): v is string => !!v && /^rediss?:\/\//.test(v);
+  for (const k of ['REDIS_URL', 'KV_URL']) if (isRedis(env[k])) return env[k];
+  return Object.keys(env).sort().map((k) => env[k]).find(isRedis);
+}
+
 /** Store over a Redis URL (Upstash's REDIS_URL from the Vercel Marketplace, or any Redis 6+). */
 export function redisStore(url: string): Store {
   const client = createClient({ url });

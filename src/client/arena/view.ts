@@ -100,6 +100,8 @@ export class ArenaView {
   curves: CurveView[] = [];
   frame: Frame | null = null;
   selectedId: string | null = null;
+  /** More actors drawn as selected (the cheat's targets). */
+  marked = new Set<string>();
   /** A dashed circle on the board (the teleport range). */
   zone: { x: number; y: number; r: number; color: string } | null = null;
   onActorClick?: (id: string) => void;
@@ -468,7 +470,7 @@ export class ArenaView {
     }
     for (const c of this.curves) drawCurve(ctx, cam, c);
     if (this.frame) drawLocalFrame(ctx, cam, this.frame.x, this.frame.y, this.frame.facing, this.frame.color);
-    for (const a of this.actors) drawActor(ctx, cam, a, a.alive ? this.moodOf(a) : 'hit', this.time, a.id === this.selectedId, this.wobble.get(a.id) ?? 0);
+    for (const a of this.actors) drawActor(ctx, cam, a, a.alive ? this.moodOf(a) : 'hit', this.time, a.id === this.selectedId || this.marked.has(a.id), this.wobble.get(a.id) ?? 0);
 
     for (const p of this.projectiles) {
       const head = this.headOf(p);

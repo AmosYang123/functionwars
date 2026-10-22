@@ -1,3 +1,4 @@
+import { cheatShots, isCheatCode, type CheatShot } from '../../engine/cheat.ts';
 import { arenaFrom, shotOptions, teleportCheck, type Player, type PowerUse, type ShotEvent } from '../../engine/game.ts';
 import { shapeCenter } from '../../engine/geometry.ts';
 import { ARENA_BOUNDS, PLAYER_RADIUS } from '../../engine/map.ts';
@@ -80,6 +81,11 @@ export class BattleView {
   private powerOn = false;
   private teleportTo: Vec | null = null;
   private notes: ReturnType<typeof notesToggle>;
+  /** Who typed "opensesame". It stays on for them, so hot-seat rivals never get it. */
+  private cheatFor: string | null = null;
+  private targets: string[] = [];
+  private cheats: CheatShot[] = [];
+  private cheatEl: HTMLElement;
 
   constructor(root: HTMLElement, private opts: BattleOptions) {
     this.turnEl = h('div', { class: 'turn' });
@@ -115,6 +121,7 @@ export class BattleView {
     this.notes = notesToggle();
     this.powerBtn = h('button', { type: 'button', class: 'power-btn', hidden: true, 'aria-pressed': 'false', onclick: () => this.togglePower() });
     this.bar.addExtra(this.powerBtn);
+    this.cheatEl = h('div', { class: 'cheat-panel', hidden: true, 'aria-live': 'polite' });
 
     // The board is the whole screen; everything else floats on top of it.
     const hudCenter = h('div', { class: 'hud-center' }, this.turnEl, this.clockEl);
@@ -123,7 +130,7 @@ export class BattleView {
       hudCenter,
       h('div', { class: 'hud-right' }, this.roundTitle, this.playersEl, logBtn),
     );
-    const hudBottom = h('div', { class: 'hud-bottom' }, this.bar.el);
+    const hudBottom = h('div', { class: 'hud-bottom' }, this.cheatEl, this.bar.el);
     this.el = h('div', { class: 'game-full' }, board, hudTop, drawer, hudBottom, this.notes.panel);
     root.append(this.el);
     document.body.classList.add('is-game');
@@ -193,8 +200,11 @@ export class BattleView {
     this.activeId = id;
     this.powerOn = false;
     this.teleportTo = null;
+    this.targets = [];
+    this.cheats = [];
     const p = this.snap?.players.find((q) => q.id === id);
     this.renderPower();
+    this.renderCheat();
     if (p) {
       const color = this.color(p);
       this.bar.setColor(color);
@@ -277,6 +287,7 @@ export class BattleView {
     this.renderPower();
     this.syncActors();
     this.updatePreview();
+    this.solveCheat();
   }
 
   private pickTeleport(pt: Vec) {
@@ -292,6 +303,73 @@ export class BattleView {
     sfx.click();
     this.syncActors();
     this.bar.value = this.bar.value;
+    this.solveCheat();
+  }
+
+  private get cheating() {
+    return !!this.activeId && this.cheatFor === this.activeId;
+  }
+
+  private pickTarget(id: string) {
+    const t = this.snap?.players.find((q) => q.id === id);
+    if (!this.cheating || !t?.alive || id === this.activeId) return;
+    this.targets = this.targets.includes(id) ? this.targets.filter((x) => x !== id) : [...this.targets, id];
+    sfx.click();
+    this.solveCheat();
+  }
+
+  /** Work out shots at the chosen targets and type the best one in. */
+  private solveCheat() {
+    const p = this.snap?.players.find((q) => q.id === this.activeId);
+    if (!this.snap || !p || !this.cheating) return;
+    const power = this.powerOn ? p.power : null;
+    const from = power === 'teleport' ? this.teleportTo : null;
+    this.cheats = [];
+    if (this.targets.length && !(power === 'teleport' && !from)) {
+      this.cheats = cheatShots(arenaFrom(this.snap, p.id, from ?? undefined), p.id, this.targets, { mirror: power === 'mirror', shot: shotOptions(power) });
+      if (this.cheats[0]) this.useCheat(this.cheats[0]);
+    }
+    this.renderCheat();
+  }
+
+  private useCheat(c: CheatShot) {
+    this.bar.setFacing(c.facing);
+    this.bar.value = c.expr;
+  }
+
+  private renderCheat() {
+    const on = this.cheating;
+    this.cheatEl.hidden = !on;
+    this.arena.marked = new Set(on ? this.targets : []);
+    this.arena.onActorClick = on ? (id) => this.pickTarget(id) : undefined;
+    this.arena.clickable = on ? (a) => a.alive && a.id !== this.activeId && a.id !== 'ghost' : undefined;
+    if (!on || !this.snap) return;
+    const name = (id: string) => {
+      const q = this.snap!.players.find((x) => x.id === id);
+      return q ? playerLabel(q) : 'them';
+    };
+    const p = this.snap.players.find((q) => q.id === this.activeId);
+    const lines: (HTMLElement | string)[] = [];
+    if (!this.targets.length) lines.push(h('p', null, 'Click the players you want to hit.'));
+    else if (this.powerOn && p?.power === 'teleport' && !this.teleportTo) lines.push(h('p', null, 'Pick your teleport spot first.'));
+    else {
+      for (const c of this.cheats) {
+        lines.push(h('button', { type: 'button', class: 'cheat-shot', onclick: () => this.useCheat(c) }, h('code', null, `y = ${c.expr}`), h('span', null, c.opens ? `blasts a way through to ${name(c.opens)}` : `hits ${c.hits.map(name).join(' and ')}`)));
+      }
+      const missed = this.targets.filter((t) => !this.cheats.some((c) => c.hits.includes(t) || c.opens === t));
+      if (missed.length) lines.push(h('p', null, `No shot can reach ${missed.map(name).join(' or ')} from here.`));
+      if (this.targets.length > 1 && !this.cheats.some((c) => c.hits.length > 1)) {
+        lines.push(h('p', { class: 'muted' }, 'A shot stops at the first player it hits, so each function takes out one. With Mirror Shot on, one function can hit a player on each side.'));
+      }
+    }
+    this.cheatEl.replaceChildren(
+      h('div', { class: 'cheat-head' }, h('strong', null, 'Open sesame'), h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Turn the cheat off', onclick: () => {
+        this.cheatFor = null;
+        this.targets = [];
+        this.renderCheat();
+      } }, icon('close', 16))),
+      ...lines,
+    );
   }
 
   private updatePreview() {
@@ -312,6 +390,15 @@ export class BattleView {
       return;
     }
     const expr = this.bar.value;
+    if (isCheatCode(expr)) {
+      this.cheatFor = p.id;
+      this.targets = [];
+      this.cheats = [];
+      sfx.click();
+      this.renderCheat();
+      this.bar.value = '';
+      return;
+    }
     if (!expr.trim()) {
       this.arena.curves = [];
       this.bar.setSubmit('Lock in', false);

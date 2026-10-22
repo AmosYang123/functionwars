@@ -3048,3 +3048,62 @@ legend,
 .notes-bar .btn.is-armed {
   background: var(--bad-soft);
 }
+
+/* "opensesame" cheat: chosen targets and the shots that hit them, above the input. */
+.cheat-panel {
+  display: grid;
+  gap: 6px;
+  max-height: 40vh;
+  overflow: auto;
+  margin-bottom: 8px;
+  padding: 8px 10px 10px;
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--r-sm);
+  background: var(--yellow-soft);
+  box-shadow: var(--lip);
+  font: 600 14px/1.35 var(--body);
+}
+
+.cheat-panel p {
+  margin: 0;
+}
+
+.cheat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font: 800 15px/1 var(--display);
+}
+
+.cheat-head .icon-btn {
+  width: 30px;
+  height: 30px;
+}
+
+.cheat-shot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 6px 10px;
+  border: var(--bw) solid var(--ink);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cheat-shot:hover {
+  background: var(--sunk);
+}
+
+.cheat-shot code {
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.cheat-shot span {
+  color: var(--ink-3);
+}

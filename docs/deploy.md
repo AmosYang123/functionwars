@@ -8,7 +8,9 @@ The site is static files from `dist/`. Online play is a Vercel Function, `api/ws
 2. **Connect Redis:** in the project, open **Storage → Create Database → Upstash for Redis** (free tier is enough) and connect it to the project. This adds `REDIS_URL` (and `KV_URL`) to the project's environment variables. Any Redis 6+ with a `REDIS_URL` works.
 3. **Redeploy** so the function picks up the variable.
 
-Check it: `https://<your-site>/api/ws` answers `ok`. Without Redis it answers 503 with a hint, and "Play online" says the game server can't be reached; everything else still works.
+Check it: `https://<your-site>/api/ws` answers `ok` with Redis, or `ok (no Redis: rooms are kept in memory)` without it.
+
+Without Redis, online play still runs, with rooms kept in the memory of whichever function instance a player reaches. With little traffic Vercel sends everyone to the same instance, so it mostly works; when it starts a second instance, players on it get "room not found" and a reconnect can lose the seat. Connect Redis to make it reliable. The function finds the address in `REDIS_URL`, `KV_URL`, or any other variable holding a `redis://` or `rediss://` URL (the Marketplace can add a custom prefix).
 
 How it holds up on serverless:
 
