@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { Lobby } from '../../server/rooms.ts';
+import { Lobby } from '../../server/lobby.ts';
+import { hashKey } from '../../server/socket.ts';
 import { defaultLook, parseLook, uniqueColor } from './look.ts';
 import { parseClientMsg, type ServerMsg } from './protocol.ts';
 
@@ -19,14 +20,12 @@ describe('cosmetics from the network', () => {
     const lobby = new Lobby();
     const inbox: ServerMsg[] = [];
     const look = { color: '#ff8a1f', face: 'cat' as const, hat: 'crown' as const, shot: 'rainbow' as const };
-    lobby.handle({ id: 'a', send: (m) => inbox.push(m) }, { t: 'create', name: 'A', lives: 1, look });
+    lobby.handle({ id: 'a', sid: 'a', keyHash: hashKey('a'), send: (m) => inbox.push(m) }, { t: 'create', name: 'A', lives: 1, look });
     const code = (inbox.find((m) => m.t === 'room') as Extract<ServerMsg, { t: 'room' }>).code;
-    lobby.handle({ id: 'b', send: (m) => inbox.push(m) }, { t: 'join', code, name: 'B', look });
+    lobby.handle({ id: 'b', sid: 'b', keyHash: hashKey('b'), send: (m) => inbox.push(m) }, { t: 'join', code, name: 'B', look });
     const room = [...inbox].reverse().find((m) => m.t === 'room') as Extract<ServerMsg, { t: 'room' }>;
     expect(room.players.map((p) => p.look.color)).toEqual(['#ff8a1f', '#f0483e']);
     expect(room.players[1].look.hat).toBe('crown');
-    lobby.disconnect('a');
-    lobby.disconnect('b');
   });
 
   it('validates power-up use on lock messages', () => {

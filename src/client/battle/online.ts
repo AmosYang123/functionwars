@@ -100,6 +100,7 @@ export function mountOnline(root: HTMLElement, go: (path: string) => void): () =
       h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => {
         window.clearInterval(countdown);
         net.send({ t: 'leave' });
+        net.inRoom = false;
         room = null;
         renderJoin();
       } }, 'Leave lobby'),
@@ -125,6 +126,7 @@ export function mountOnline(root: HTMLElement, go: (path: string) => void): () =
         : h('p', { class: 'muted' }, 'The host will start the game.'),
       h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => {
         net.send({ t: 'leave' });
+        net.inRoom = false;
         room = null;
         renderJoin();
       } }, 'Leave room'),
@@ -164,12 +166,22 @@ export function mountOnline(root: HTMLElement, go: (path: string) => void): () =
         return;
       case 'error':
         sfx.error();
+        if (m.code === 'resume') {
+          // Reconnected too late: the seat was given up.
+          window.clearInterval(tick);
+          closeView();
+          room = null;
+          renderJoin();
+          errorEl.textContent = 'You were disconnected, and that game is no longer available. Join a new one below.';
+          return;
+        }
         if (view) view.bar.showError(m.msg);
         else errorEl.textContent = m.msg;
         return;
       case 'room':
         errorEl.textContent = '';
         room = m;
+        net.inRoom = true;
         // During a match the board owns the screen; the game-over dialog leads back here.
         if (!view) renderRoom(m);
         return;
@@ -178,6 +190,8 @@ export function mountOnline(root: HTMLElement, go: (path: string) => void): () =
         v.hideOverlay();
         v.setGame(m.game);
         locks.clear();
+        // After a reconnect the round may already have locks, possibly yours.
+        for (const l of m.locks) locks.set(l.id, l.at);
         v.setOrder(m.locks.map<OrderCell>((l) => ({ id: l.id, locked: true, at: l.at })));
         if (spinsAt(m.game.round)) void v.spin(you);
         const p = me(m.game);
@@ -187,6 +201,10 @@ export function mountOnline(root: HTMLElement, go: (path: string) => void): () =
         } else {
           v.setActive(null);
           v.setWaiting('You are out. Watching the rest of the game.');
+        }
+        if (locks.has(you)) {
+          v.setActive(null);
+          v.setWaiting(`Locked in at ${(locks.get(you)! / 1000).toFixed(1)}s. Waiting for the others.`);
         }
         const deadline = performance.now() + m.prepMs;
         let lastSec = 0;
@@ -224,6 +242,7 @@ export function mountOnline(root: HTMLElement, go: (path: string) => void): () =
             ? { label: 'Find another game', primary: true, onClick: () => {
                 closeView();
                 net.send({ t: 'leave' });
+                net.inRoom = false;
                 room = null;
                 net.send({ t: 'quick', name: name(), look: loadLook() });
               } }
@@ -243,8 +262,17 @@ export function mountOnline(root: HTMLElement, go: (path: string) => void): () =
   net.onMessage = (m) => {
     chain = chain.then(() => handle(m)).catch(() => {});
   };
-  net.onClose = () => {
+  net.onStatus = (status) => {
     if (disposed) return;
+    if (status === 'reconnecting') {
+      if (view) view.banner('Reconnecting…', 'Your seat is saved for 20 seconds', undefined, 6000);
+      else errorEl.textContent = 'Reconnecting to the game server…';
+      return;
+    }
+    if (status === 'online') {
+      if (errorEl.textContent?.startsWith('Reconnecting')) errorEl.textContent = '';
+      return;
+    }
     const msg = "Can't reach the game server, so online play isn't available right now. Play on this device instead, or try again later.";
     if (view) {
       view.showOverlay(h('div', { class: 'dialog' }, h('h2', null, 'Disconnected'), h('p', null, msg), h('button', { type: 'button', class: 'btn btn-primary btn-lg', onclick: () => go('#/') }, 'Home')));

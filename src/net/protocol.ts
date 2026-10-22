@@ -12,7 +12,9 @@ export type ClientMsg =
   | { t: 'quick'; name: string; look: Look }
   | { t: 'start' }
   | { t: 'lock'; expr: string; facing: Facing; power?: boolean; to?: Vec }
-  | { t: 'leave' };
+  | { t: 'leave' }
+  /** After a reconnect: take back the seat of the player you were. */
+  | { t: 'resume'; id: string; key: string };
 
 export interface RoomPlayer {
   id: string;
@@ -23,7 +25,9 @@ export interface RoomPlayer {
 }
 
 export type ServerMsg =
-  | { t: 'welcome'; you: string }
+  /** Sent on connect. `key` proves who you are if you reconnect; keep it private. */
+  | { t: 'welcome'; you: string; key: string }
+  | { t: 'resumed' }
   | {
       t: 'room';
       code: string;
@@ -38,7 +42,8 @@ export type ServerMsg =
   | { t: 'round'; game: PublicGame; prepMs: number; locks: { id: string; at: number }[] }
   | { t: 'locked'; id: string; at: number }
   | { t: 'resolve'; events: ShotEvent[]; game: PublicGame; nextInMs: number | null }
-  | { t: 'error'; msg: string };
+  /** code 'resume': the seat you tried to take back is gone. */
+  | { t: 'error'; msg: string; code?: 'resume' };
 
 export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export const CODE_LENGTH = 5;
@@ -71,6 +76,10 @@ export function parseClientMsg(raw: unknown): ClientMsg | null {
     case 'start':
     case 'leave':
       return { t: raw.t };
+    case 'resume':
+      if (typeof raw.id !== 'string' || !/^[0-9a-f-]{36}$/.test(raw.id)) return null;
+      if (typeof raw.key !== 'string' || !/^[0-9a-f]{32}$/.test(raw.key)) return null;
+      return { t: 'resume', id: raw.id, key: raw.key };
     case 'lock': {
       if (typeof raw.expr !== 'string' || raw.expr.length > MAX_EXPR_LENGTH) return null;
       if (raw.facing !== 1 && raw.facing !== -1) return null;

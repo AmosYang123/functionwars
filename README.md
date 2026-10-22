@@ -8,12 +8,12 @@ A multiplayer battle game played on a real coordinate plane. Type a function of 
 npm install
 npm run dev      # Vite on http://localhost:5173 + game server on :3000 (online play)
 npm test         # engine, solver, powers, challenge/lesson solvability, server rooms
-npm run build && npm start   # production: server serves dist/ and /ws on :3000
+npm run build && npm start   # production: server serves dist/ and /ws on :3000 (also rebuilds api/ws.js)
 ```
 
-Environment: `PORT` (default 3000), `ALLOWED_ORIGINS` (comma-separated WebSocket origins; defaults to same host), `NODE_ENV=production` (enables HSTS, disables localhost origin allowance). Client build: `VITE_WS_URL` (game server address when the site and the server are on different hosts).
+Environment: `PORT` (default 3000), `ALLOWED_ORIGINS` (comma-separated WebSocket origins; defaults to same host), `NODE_ENV=production` (enables HSTS, disables localhost origin allowance). Client build: `VITE_WS_URL` (game server address when the site and the server are on different hosts). Vercel function: `REDIS_URL` (or `KV_URL`).
 
-Deploying to Vercel (site) plus a WebSocket host (online play): see [docs/deploy.md](docs/deploy.md).
+Deploying to Vercel, including online play (needs a Redis database connected to the project): see [docs/deploy.md](docs/deploy.md).
 
 ## Modes
 
@@ -48,7 +48,7 @@ A seeded spinner deals every living player one power-up on round 1 and every 2 r
 
 - `src/engine/` pure TypeScript, shared by client and server: parser (`expr.ts`), anchored trajectories (`trajectory.ts`), exact segment/shape collision (`collision.ts`, `geometry.ts`), round rules (`game.ts`), power-ups (`powers.ts`), map generation, Help solver, feedback text.
 - `src/net/` message types and validation for untrusted client input (`protocol.ts`), cosmetics catalog and validation (`look.ts`).
-- `server/` HTTP static server + WebSocket rooms (`rooms.ts` owns timers, lock timestamps and hit resolution).
+- `server/` online play. `room.ts` holds the rules for a room as plain data (lock timestamps, hit resolution, timers as `due` times, 20 s reconnect grace). Hosts: `lobby.ts` keeps rooms in memory for `npm start`; `redis-lobby.ts` shares them through Redis for Vercel (`vercel-ws.ts`, bundled to `api/ws.js`). `socket.ts` handles connections, validation and rate limits for both.
 - `src/client/` canvas arena (`arena/`, cosmetics drawing in `arena/skins.ts`), editor, screens, `notes/`, `locker.ts`.
 
-Not built yet: reconnect after disconnect, progression, extra hand-made maps.
+Not built yet: progression, extra hand-made maps.

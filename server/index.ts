@@ -1,17 +1,12 @@
-import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer, type WebSocket } from 'ws';
-import { parseClientMsg, type ServerMsg } from '../src/net/protocol.ts';
-import { Lobby } from './rooms.ts';
+import { Lobby } from './lobby.ts';
+import { serveSockets } from './socket.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const DIST = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-const MSG_RATE = 10; // per second
-const MSG_BURST = 20;
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -68,74 +63,6 @@ const server = createServer((req, res) => {
   else createReadStream(file).pipe(res);
 });
 
-function originAllowed(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  if (!origin) return false;
-  if (ALLOWED_ORIGINS.length) return ALLOWED_ORIGINS.includes(origin);
-  try {
-    const o = new URL(origin);
-    const host = req.headers['x-forwarded-host'] ?? req.headers.host;
-    // Same host, or the Vite dev server proxying from localhost.
-    return o.host === host || ((o.hostname === 'localhost' || o.hostname === '127.0.0.1') && process.env.NODE_ENV !== 'production');
-  } catch {
-    return false;
-  }
-}
-
-const lobby = new Lobby();
-const wss = new WebSocketServer({ noServer: true, maxPayload: 2048 });
-
-server.on('upgrade', (req, socket, head) => {
-  if (new URL(req.url ?? '/', 'http://x').pathname !== '/ws' || !originAllowed(req)) {
-    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
-});
-
-wss.on('connection', (ws: WebSocket) => {
-  const id = randomUUID();
-  const conn = {
-    id,
-    send: (msg: ServerMsg) => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
-    },
-  };
-  let tokens = MSG_BURST;
-  let last = Date.now();
-  let strikes = 0;
-  conn.send({ t: 'welcome', you: id });
-
-  ws.on('message', (data, isBinary) => {
-    const now = Date.now();
-    tokens = Math.min(MSG_BURST, tokens + ((now - last) / 1000) * MSG_RATE);
-    last = now;
-    if (tokens < 1) {
-      if (++strikes > 50) ws.close(1008, 'Too many messages');
-      return;
-    }
-    tokens -= 1;
-    if (isBinary) return;
-    let raw: unknown;
-    try {
-      raw = JSON.parse(data.toString());
-    } catch {
-      return;
-    }
-    const msg = parseClientMsg(raw);
-    if (!msg) {
-      conn.send({ t: 'error', msg: 'Malformed message' });
-      return;
-    }
-    try {
-      lobby.handle(conn, msg);
-    } catch (e) {
-      console.error('handler error', e instanceof Error ? e.message : 'unknown');
-      conn.send({ t: 'error', msg: 'Something went wrong' });
-    }
-  });
-  ws.on('close', () => lobby.disconnect(id));
-});
+serveSockets(server, new Lobby(), ['/ws']);
 
 server.listen(PORT, () => console.log(`Function War server on http://localhost:${PORT}`));

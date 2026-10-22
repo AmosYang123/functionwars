@@ -1,39 +1,25 @@
 # Deploying
 
-Function War has two parts:
+## Vercel (everything, including online play)
 
-1. **The site** (everything in `dist/` after `npm run build`): static files. Vercel hosts this.
-2. **The game server** (`server/`): a long-running Node process holding WebSocket connections for online rooms. Vercel Functions can't keep WebSockets open, so this part runs on a host that can (Render, Railway, Fly.io, any VPS).
+The site is static files from `dist/`. Online play is a Vercel Function, `api/ws.js`, that holds the WebSocket connections; `vercel.json` rewrites `/ws` to it. Rooms are shared between function instances through Redis, so online play needs a Redis database connected to the project.
 
-Hot-seat play, Practice, Learn, Notes and the Locker work on Vercel alone. Only "Play online" needs the game server.
+1. Import the repo in Vercel. `vercel.json` sets the framework (Vite), build command, output directory, the `/ws` rewrite and security headers.
+2. **Connect Redis:** in the project, open **Storage → Create Database → Upstash for Redis** (free tier is enough) and connect it to the project. This adds `REDIS_URL` (and `KV_URL`) to the project's environment variables. Any Redis 6+ with a `REDIS_URL` works.
+3. **Redeploy** so the function picks up the variable.
 
-## 1. Game server (Render example)
+Check it: `https://<your-site>/api/ws` answers `ok`. Without Redis it answers 503 with a hint, and "Play online" says the game server can't be reached; everything else still works.
 
-`render.yaml` describes the service. In Render: **New → Blueprint**, pick this repo, then set:
+How it holds up on serverless:
 
-- `ALLOWED_ORIGINS` = your Vercel URL, e.g. `https://function-war.vercel.app` (comma-separate several; include custom domains). The server rejects WebSocket connections from any other origin.
+- A Vercel Function closes its WebSockets when it reaches its maximum duration (300 s by default). The client reconnects on its own and takes back its seat with the resume key it got on connect, so a match carries on.
+- A dropped player's seat is held for 20 seconds (`GRACE_MS` in `server/room.ts`). Leaving on purpose gives it up at once.
+- Each change to a room runs under a short Redis lock and is published to every instance holding a player of that room. Round timers live in the room's data (`due`), so any instance can run them.
 
-Or by hand on any Node 20.19+ host:
+### Rebuilding the function
 
-```sh
-npm ci
-NODE_ENV=production ALLOWED_ORIGINS=https://function-war.vercel.app PORT=3000 npm start
-```
+`npm run build` regenerates `api/ws.js` from `server/vercel-ws.ts`. It is committed because Vercel compiles functions with the TypeScript compiler API, which TypeScript 7 doesn't provide. Run `npm run build` and commit `api/ws.js` after changing anything under `server/` or `src/engine/`.
 
-Health check: `GET /health` returns `ok`. Note the WebSocket URL: `wss://<your-server-host>/ws`.
+## One Node host instead
 
-Free tiers that sleep when idle will make the first online connection slow.
-
-## 2. Site on Vercel
-
-1. Import the repo in Vercel. `vercel.json` sets the framework (Vite), build command and output directory, plus security headers.
-2. In **Settings → Environment Variables**, add `VITE_WS_URL` = `wss://<your-server-host>/ws` for Production (and Preview if you want online play there; add those preview origins to `ALLOWED_ORIGINS` too).
-3. Deploy. `VITE_WS_URL` is read at build time: redeploy after changing it.
-
-The build bakes `VITE_WS_URL`'s origin into the page's Content-Security-Policy (`connect-src`), so the page can only open WebSockets to its own origin and that server.
-
-Without `VITE_WS_URL`, the site still works; "Play online" shows that the game server can't be reached.
-
-## Single host instead
-
-`npm run build && npm start` on one Node host serves the site and `/ws` together; no `VITE_WS_URL` needed.
+`npm run build && npm start` serves the site and `/ws` from a single process with rooms in memory (no Redis). Set `ALLOWED_ORIGINS` if the page is served from another origin, and build the client with `VITE_WS_URL=wss://<host>/ws` in that case.
