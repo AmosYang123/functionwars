@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/client/style.css"
+        ],
+        "createdAt": "2026-10-21T17:00:45.373Z",
+        "reason": "agent judgment: only matches are the full-height nav rail and side panel dividers in the global 3px ink outline system, not card accents"
+      }
+    ]
+  }
+}

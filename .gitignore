@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+.env.*
+.impeccable/review
+.impeccable/build
+.vercel
+.impeccable/hook.cache.json
