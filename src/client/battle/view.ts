@@ -1,4 +1,4 @@
-import { cheatShots, isCheatCode, type CheatShot } from '../../engine/cheat.ts';
+import { advisePower, cheatShots, isCheatCode, type CheatShot, type PowerAdvice } from '../../engine/cheat.ts';
 import { arenaFrom, shotOptions, teleportCheck, type Player, type PowerUse, type ShotEvent } from '../../engine/game.ts';
 import { shapeCenter } from '../../engine/geometry.ts';
 import { ARENA_BOUNDS, PLAYER_RADIUS } from '../../engine/map.ts';
@@ -85,6 +85,7 @@ export class BattleView {
   private cheatFor: string | null = null;
   private targets: string[] = [];
   private cheats: CheatShot[] = [];
+  private advice: PowerAdvice | null = null;
   private cheatEl: HTMLElement;
 
   constructor(root: HTMLElement, private opts: BattleOptions) {
@@ -325,11 +326,54 @@ export class BattleView {
     const power = this.powerOn ? p.power : null;
     const from = power === 'teleport' ? this.teleportTo : null;
     this.cheats = [];
-    if (this.targets.length && !(power === 'teleport' && !from)) {
-      this.cheats = cheatShots(arenaFrom(this.snap, p.id, from ?? undefined), p.id, this.targets, { mirror: power === 'mirror', shot: shotOptions(power) });
+    this.advice = null;
+    if (this.targets.length) {
+      const plain = cheatShots(arenaFrom(this.snap, p.id), p.id, this.targets);
+      this.advice = advisePower(this.snap, p.id, this.targets, p.power, plain);
+      if (!power) this.cheats = plain;
+      else if (power !== 'teleport' || from) this.cheats = cheatShots(arenaFrom(this.snap, p.id, from ?? undefined), p.id, this.targets, { mirror: power === 'mirror', shot: shotOptions(power) });
       if (this.cheats[0]) this.useCheat(this.cheats[0]);
     }
     this.renderCheat();
+  }
+
+  /** Do what the power-up advice says: switch it on (jumping to its Teleport spot) or off. */
+  private followAdvice() {
+    const a = this.advice;
+    if (!a) return;
+    this.powerOn = a.use;
+    this.teleportTo = a.use ? (a.to ?? null) : null;
+    sfx.click();
+    this.renderPower();
+    this.syncActors();
+    this.updatePreview();
+    this.solveCheat();
+  }
+
+  /** One line on the held power-up for these targets, with a button when something should change. */
+  private adviceLine(name: (id: string) => string): HTMLElement | null {
+    const a = this.advice;
+    if (!a) return null;
+    const pw = POWERS[a.power].name;
+    const on = this.powerOn && (a.power !== 'teleport' || !!this.teleportTo);
+    const plainHits = new Set(this.cheats.flatMap((c) => c.hits));
+    const gained = [...new Set(a.shots.flatMap((c) => c.hits))].filter((t) => !on && !plainHits.has(t)).map(name);
+    const who = (gained.length ? gained : [...new Set(a.shots.flatMap((c) => c.hits))].map(name)).join(' and ');
+    const lead = a.use ? (on ? `Keep ${pw} on` : `Turn on ${pw}`) : `${pw} doesn't help here`;
+    const why = {
+      pair: `: one function hits ${who}, one on each side.`,
+      'drill-hit': `: it drills through the obstacle to hit ${who}.`,
+      'drill-line': `: a straight line through the obstacle does it, y = ${a.shots[0]?.expr}.`,
+      mega: `: its wider blast catches ${who}.`,
+      teleport: `${on ? '' : ' and jump to the spot it picks'}: from there you can hit ${who}.`,
+      'no-help': this.powerOn ? '. Turn it off to save it.' : '.',
+    }[a.why];
+    const act = a.use ? !on : this.powerOn;
+    return h('p', { class: 'cheat-advice', style: `--pw: ${POWERS[a.power].color}` },
+      icon(a.power, 16),
+      h('span', null, lead + why),
+      act ? h('button', { type: 'button', class: 'btn btn-secondary btn-sm', onclick: () => this.followAdvice() }, a.use ? (a.power === 'teleport' ? 'Turn on and jump' : 'Turn it on') : 'Turn it off') : null,
+    );
   }
 
   private useCheat(c: CheatShot) {
@@ -351,8 +395,13 @@ export class BattleView {
     const p = this.snap.players.find((q) => q.id === this.activeId);
     const lines: (HTMLElement | string)[] = [];
     if (!this.targets.length) lines.push(h('p', null, 'Click the players you want to hit.'));
-    else if (this.powerOn && p?.power === 'teleport' && !this.teleportTo) lines.push(h('p', null, 'Pick your teleport spot first.'));
-    else {
+    else if (this.powerOn && p?.power === 'teleport' && !this.teleportTo) {
+      const adv = this.adviceLine(name);
+      lines.push(adv ?? h('p', null, 'Pick your teleport spot first.'));
+      if (adv && !this.advice?.use) lines.push(h('p', null, 'Or pick a teleport spot yourself.'));
+    } else {
+      const adv = this.adviceLine(name);
+      if (adv) lines.push(adv);
       for (const c of this.cheats) {
         lines.push(h('button', { type: 'button', class: 'cheat-shot', onclick: () => this.useCheat(c) }, h('code', null, `y = ${c.expr}`), h('span', null, c.opens ? `blasts a way through to ${name(c.opens)}` : `hits ${c.hits.map(name).join(' and ')}`)));
       }
@@ -376,6 +425,15 @@ export class BattleView {
     const p = this.snap?.players.find((q) => q.id === this.activeId);
     this.arena.zone = null;
     if (!this.snap || !p) return;
+    if (isCheatCode(this.bar.value)) {
+      this.cheatFor = p.id;
+      this.targets = [];
+      this.cheats = [];
+      sfx.click();
+      this.renderCheat();
+      this.bar.value = '';
+      return;
+    }
     const color = this.color(p);
     const power = this.powerOn ? p.power : null;
     const from = power === 'teleport' ? this.teleportTo : null;
@@ -390,15 +448,6 @@ export class BattleView {
       return;
     }
     const expr = this.bar.value;
-    if (isCheatCode(expr)) {
-      this.cheatFor = p.id;
-      this.targets = [];
-      this.cheats = [];
-      sfx.click();
-      this.renderCheat();
-      this.bar.value = '';
-      return;
-    }
     if (!expr.trim()) {
       this.arena.curves = [];
       this.bar.setSubmit('Lock in', false);

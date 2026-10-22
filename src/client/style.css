@@ -3107,3 +3107,22 @@ legend,
 .cheat-shot span {
   color: var(--ink-3);
 }
+
+.cheat-advice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--pw) 14%, #fff);
+}
+
+.cheat-advice .icon {
+  flex: none;
+  color: var(--pw);
+}
+
+.cheat-advice span {
+  flex: 1 1 220px;
+}
